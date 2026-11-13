@@ -87,6 +87,10 @@ body::before{position:fixed;inset:0;z-index:-1}
 #mus.on{opacity:1;animation:sp 7s linear infinite}
 @keyframes sp{to{transform:rotate(360deg)}}
 @media (prefers-reduced-motion:reduce){#mus.on{animation:none}}
+#rsvpList{margin-top:22px}
+#rsvpList h3{font-size:1.25rem;text-align:center;letter-spacing:.14em;text-transform:uppercase;font-weight:500;margin-bottom:12px}
+#rsvpList .g{display:flex;justify-content:space-between;gap:12px;padding:9px 2px;border-bottom:1px solid var(--line)}
+#rsvpList .g span:last-child{color:var(--mute);white-space:nowrap}
 </style>
 </head>
 <body class="locked">
@@ -140,7 +144,7 @@ body::before{position:fixed;inset:0;z-index:-1}
 
   <section class="wrap" style="padding-top:0" id="rsvp">
     <h2>RSVP</h2><span class="orn"></span>
-    <p class="center mute" style="margin-top:-8px">Isi konfirmasi kehadiran berikut ini untuk dapatkan QR Code atas namamu yaa. QR Code ini bisa kamu tukarkan Souvenir Cantik di Hari Pernikahan kami nanti ❤️😉</p>
+    <p class="center mute" style="margin-top:-8px">Mohon konfirmasi kehadiran Bapak/Ibu/Saudara/i melalui formulir di bawah ini.</p>
     <p class="note" id="note"></p>
     <div class="stats"><div><b id="sumYes">0</b><small>Tamu hadir</small></div><div><b id="sumNo">0</b><small>Berhalangan</small></div></div>
     <form id="fRsvp" class="card">
@@ -151,8 +155,10 @@ body::before{position:fixed;inset:0;z-index:-1}
       </div>
       <div id="paxBox"><label class="l" for="pax">Jumlah tamu</label>
         <select id="pax"><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></div>
-      <button type="submit">Kirim Konfirmasi</button>
+      <button type="submit">Konfirmasi &amp; Kirim ke WhatsApp</button>
     </form>
+    <a id="waBtn" target="_blank" rel="noopener" style="display:none;text-align:center;margin-top:14px;padding:12px 18px;border:1px solid var(--gold);border-radius:999px;color:var(--gold);text-decoration:none">Buka WhatsApp untuk kirim konfirmasi ➜</a>
+    <div id="rsvpList" aria-live="polite"></div>
   </section>
 
   <section class="wrap" style="padding-top:0">
@@ -226,8 +232,9 @@ body::before{position:fixed;inset:0;z-index:-1}
     document.querySelectorAll('.cd b').forEach(function(e,i){e.textContent=String(v[i]).padStart(2,'0')})}
   tick();setInterval(tick,1000);
 
-  /* Data layer - Terhubung Dua Arah ke Google Spreadsheet */
+  /* Data layer - Integrasi Google Spreadsheet & Forward WhatsApp */
   var GAS_URL = 'https://script.google.com/macros/s/AKfycbwAsWd5lYpCU0O3vOXkCgeTrCbIg-UjX7TCtS6LGTEU4UBbb1AwsS3oCBgmbrrfr7Gc/exec';
+  var EMBED = [];
 
   function goLocal(msg){
     local=true;
@@ -243,6 +250,7 @@ body::before{position:fixed;inset:0;z-index:-1}
       state.rsvp = (json.rsvp || []).reverse();
       state.wishes = (json.wishes || []).reverse();
       local = false;
+      note('');
       render();
     }catch(e){
       if(!state.rsvp.length && !state.wishes.length){
@@ -253,25 +261,13 @@ body::before{position:fixed;inset:0;z-index:-1}
 
   async function save(c,data){
     data.ts=Date.now();
-    var myData = Object.assign({id:'me'}, data);
-    lsSet('my_'+c, [myData]);
+    var arr=lsGet(c).filter(function(x){return x.id!=='me'});
+    arr.unshift(Object.assign({id:'me'},data));
+    lsSet(c,arr);
 
-    // Update langsung tampilan angka & daftar ucapan di layar tamu
-    state[c].unshift(myData);
+    // Perbarui langsung state di layar tamu
+    state[c].unshift(Object.assign({id:'me'},data));
     render();
-
-    // Tampilkan QR Code otomatis jika tamu konfirmasi Hadir
-    if(c==='rsvp'){
-      if(data.attend==='yes'){
-        var qrText = encodeURIComponent('RSVP-TAUFIQ-ASTRID | ' + data.name + ' | ' + data.pax + ' Orang');
-        var qrUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=' + qrText;
-        var n = $('#note');
-        n.innerHTML = '<div class="center" style="color:var(--ink)">Terima kasih <b>' + data.name.replace(/</g,'&lt;') + '</b>! Screenshot QR Code ini untuk ditukarkan dengan souvenir:<br><img src="' + qrUrl + '" alt="QR Code Tamu" style="margin-top:10px;border-radius:6px;border:4px solid #fff;width:150px;height:150px"></div>';
-        n.classList.add('on');
-      } else {
-        note('Terima kasih atas konfirmasinya, ' + data.name + '. Doa restu Anda sangat berarti bagi kami.');
-      }
-    }
 
     // Kirim data ke Google Spreadsheet
     await fetch(GAS_URL, {
@@ -281,25 +277,43 @@ body::before{position:fixed;inset:0;z-index:-1}
       body: JSON.stringify(Object.assign({type: c}, data))
     });
 
-    // Sinkronkan ulang data dari Spreadsheet setelah 1.5 detik
+    // Tarik ulang data terbaru dari Spreadsheet
     setTimeout(loadRemote, 1500);
   }
 
   /* Render */
   function render(){
-    var r=state.rsvp;
+    var seen={},r=[];
+    state.rsvp.concat(EMBED).forEach(function(x){
+      var k=String(x.name||'').trim().toLowerCase();
+      if(!k||seen[k])return;
+      seen[k]=1;
+      r.push(x);
+    });
+    var yes=r.filter(function(x){return x.attend==='yes'}),box=$('#rsvpList');
+    if(box){
+      box.replaceChildren();
+      box.append(h('h3','','Tamu yang Akan Hadir'));
+      if(!yes.length)box.append(h('p','empty','Belum ada konfirmasi kehadiran.'));
+      yes.forEach(function(x){
+        var g=h('div','g');
+        g.append(h('span','',x.name),h('span','',(+x.pax||1)+' orang'));
+        box.append(g);
+      });
+    }
     $('#sumYes').textContent=r.filter(function(x){return x.attend==='yes'}).reduce(function(a,x){return a+(+x.pax||1)},0);
     $('#sumNo').textContent=r.filter(function(x){return x.attend==='no'}).length;
 
-    var m=lsGet('my_rsvp')[0];
+    var m=lsGet('rsvp').find(function(x){return x.id==='me'});
     if(m&&!filled.rsvp){
       filled.rsvp=1;
       $('#rn').value=m.name||'';
       $('#pax').value=m.pax||1;
       document.querySelector('input[name=attend][value='+(m.attend==='no'?'no':'yes')+']').checked=true;
       togglePax();
+      $('#fRsvp button').textContent='Perbarui & Kirim ke WhatsApp';
     }
-    var w=lsGet('my_wishes')[0];
+    var w=lsGet('wishes').find(function(x){return x.id==='me'});
     if(w&&!filled.wishes){
       filled.wishes=1;
       $('#wn').value=w.name||'';
@@ -327,15 +341,23 @@ body::before{position:fixed;inset:0;z-index:-1}
   }
   wire('#fRsvp',function(){
     var a=document.querySelector('input[name=attend]:checked').value;
-    return save('rsvp',{name:$('#rn').value.trim(),attend:a,pax:a==='no'?0:+$('#pax').value});
-  },'Terima kasih, konfirmasi Anda tersimpan ✓');
+    var d={name:$('#rn').value.trim(),attend:a,pax:a==='no'?0:+$('#pax').value};
+    var w=null;try{w=window.open('','_blank')}catch(e){}
+    return save('rsvp',d).then(function(){
+      var t='Halo, saya konfirmasi RSVP Tasyakuran Taufiq & Astrid.\nNama: '+d.name+'\nStatus: '+(a==='no'?'Tidak hadir':'Hadir')+(a==='no'?'':'\nJumlah tamu: '+d.pax);
+      var url='https://wa.me/6289677700899?text='+encodeURIComponent(t),l=$('#waBtn');
+      l.href=url;
+      if(w&&!w.closed){w.location.href=url;l.style.display='none'}else{l.style.display='block'}
+    }).catch(function(err){try{if(w)w.close()}catch(e){}throw err});
+  },'Terima kasih! Konfirmasi tersimpan, WhatsApp dibuka untuk mengirim ✓');
+
   wire('#fWish',function(){
-    var res = save('wishes',{name:$('#wn').value.trim(),text:$('#wt').value.trim()});
+    var p = save('wishes',{name:$('#wn').value.trim(),text:$('#wt').value.trim()});
     $('#wt').value='';
-    return res;
+    return p;
   },'Terima kasih atas ucapannya ♥');
 
-  /* Boot: Muat data dari Spreadsheet saat halaman dibuka */
+  /* Boot: Ambil data dari Google Spreadsheet */
   loadRemote();
   render();
 })();
